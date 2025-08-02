@@ -1,0 +1,74 @@
+# Install required libraries
+!pip install --upgrade torch torchvision torchaudio transformers datasets --quiet
+
+from transformers import BertTokenizer, BertForSequenceClassification, Trainer, TrainingArguments
+from datasets import load_dataset
+import torch
+
+# Step 1: Load Dataset (Using IMDb reviews for sentiment analysis)
+dataset = load_dataset("imdb")
+
+# Step 2: Preprocess Dataset
+tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+
+def tokenize_function(example):
+    return tokenizer(example["text"], padding="max_length", truncation=True)
+
+# Tokenizing datasets
+tokenized_datasets = dataset.map(tokenize_function, batched=True)
+
+# Prepare dataset for PyTorch
+tokenized_datasets = tokenized_datasets.rename_column("label", "labels")
+tokenized_datasets.set_format("torch", columns=["input_ids", "attention_mask", "labels"])
+
+# Subset for quick training
+train_dataset = tokenized_datasets["train"].shuffle(seed=42).select(range(5000))
+test_dataset = tokenized_datasets["test"].shuffle(seed=42).select(range(1000))
+
+# Step 3: Load Pre-Trained BERT Model
+model = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=2)
+
+# Step 4: Define Training Arguments
+training_args = TrainingArguments(
+    output_dir="./results",
+    evaluation_strategy="epoch",
+    learning_rate=2e-5,
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
+    weight_decay=0.01,
+    save_strategy="epoch",
+    logging_dir="./logs",
+    logging_steps=10,
+    load_best_model_at_end=True,
+)
+
+# Step 5: Define Trainer
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=test_dataset,
+)
+
+# Step 6: Fine-Tune the Model
+trainer.train()
+
+# Step 7: Evaluate the Model
+metrics = trainer.evaluate()
+print("Evaluation Metrics:", metrics)
+
+# Step 8: Save the Model
+model.save_pretrained("./fine_tuned_bert")
+tokenizer.save_pretrained("./fine_tuned_bert")
+
+# Step 9: Test Inference
+def predict(text):
+    inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+    outputs = model(**inputs)
+    logits = outputs.logits
+    predictions = torch.argmax(logits, dim=-1)
+    return "Positive" if predictions.item() == 1 else "Negative"
+
+# Test the model
+sample_text = "The movie was absolutely fantastic!"
+print("Prediction:", predict(sample_text))
